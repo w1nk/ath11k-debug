@@ -1,3 +1,29 @@
+diff --git a/drivers/bus/mhi/core/boot.c b/drivers/bus/mhi/core/boot.c
+index 24422f5c3d80..5a07a1523f79 100644
+--- a/drivers/bus/mhi/core/boot.c
++++ b/drivers/bus/mhi/core/boot.c
+@@ -393,7 +393,8 @@ void mhi_fw_load_handler(struct mhi_controller *mhi_cntrl)
+ 	dma_addr_t dma_addr;
+ 	size_t size;
+ 	int i, ret;
+-
++	unsigned long flags = 0;
++	
+ 	if (MHI_PM_IN_ERROR_STATE(mhi_cntrl->pm_state)) {
+ 		dev_err(dev, "Device MHI is not in valid state\n");
+ 		return;
+@@ -463,9 +464,9 @@ void mhi_fw_load_handler(struct mhi_controller *mhi_cntrl)
+ 	if (mhi_cntrl->ee == MHI_EE_EDL)
+ 		return;
+ 
+-	write_lock_irq(&mhi_cntrl->pm_lock);
++	write_lock_irqsave(&mhi_cntrl->pm_lock, flags);
+ 	mhi_cntrl->dev_state = MHI_STATE_RESET;
+-	write_unlock_irq(&mhi_cntrl->pm_lock);
++	write_unlock_irqrestore(&mhi_cntrl->pm_lock, flags);
+ 
+ 	/*
+ 	 * If we're doing fbc, populate vector tables while
 diff --git a/drivers/bus/mhi/core/init.c b/drivers/bus/mhi/core/init.c
 index d182ffdbaf64..d2a4a79801ff 100644
 --- a/drivers/bus/mhi/core/init.c
