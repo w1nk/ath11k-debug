@@ -1,0 +1,658 @@
+diff --git a/drivers/bus/mhi/core/init.c b/drivers/bus/mhi/core/init.c
+index d182ffdbaf64..d2a4a79801ff 100644
+--- a/drivers/bus/mhi/core/init.c
++++ b/drivers/bus/mhi/core/init.c
+@@ -1224,7 +1224,7 @@ static int mhi_driver_remove(struct device *dev)
+ 		MHI_CH_STATE_DISABLED
+ 	};
+ 	int dir;
+-
++	unsigned long flags = 0;
+ 	/* Skip if it is a controller device */
+ 	if (mhi_dev->dev_type == MHI_DEVICE_CONTROLLER)
+ 		return 0;
+@@ -1237,17 +1237,17 @@ static int mhi_driver_remove(struct device *dev)
+ 			continue;
+ 
+ 		/* Wake all threads waiting for completion */
+-		write_lock_irq(&mhi_chan->lock);
++		write_lock_irqsave(&mhi_chan->lock, flags);
+ 		mhi_chan->ccs = MHI_EV_CC_INVALID;
+ 		complete_all(&mhi_chan->completion);
+-		write_unlock_irq(&mhi_chan->lock);
++		write_unlock_irqrestore(&mhi_chan->lock, flags);
+ 
+ 		/* Set the channel state to disabled */
+ 		mutex_lock(&mhi_chan->mutex);
+-		write_lock_irq(&mhi_chan->lock);
++		write_lock_irqsave(&mhi_chan->lock, flags);
+ 		ch_state[dir] = mhi_chan->ch_state;
+ 		mhi_chan->ch_state = MHI_CH_STATE_SUSPENDED;
+-		write_unlock_irq(&mhi_chan->lock);
++		write_unlock_irqrestore(&mhi_chan->lock, flags);
+ 
+ 		/* Reset the non-offload channel */
+ 		if (!mhi_chan->offload_ch)
+diff --git a/drivers/bus/mhi/core/main.c b/drivers/bus/mhi/core/main.c
+index 2cff5ddff225..b78e77fa4c06 100644
+--- a/drivers/bus/mhi/core/main.c
++++ b/drivers/bus/mhi/core/main.c
+@@ -376,10 +376,11 @@ irqreturn_t mhi_intvec_threaded_handler(int irq_number, void *priv)
+ 	enum mhi_state state = MHI_STATE_MAX;
+ 	enum mhi_pm_state pm_state = 0;
+ 	enum mhi_ee_type ee = 0;
+-
+-	write_lock_irq(&mhi_cntrl->pm_lock);
++	unsigned long flags = 0;
++	
++	write_lock_irqsave(&mhi_cntrl->pm_lock, flags);
+ 	if (!MHI_REG_ACCESS_VALID(mhi_cntrl->pm_state)) {
+-		write_unlock_irq(&mhi_cntrl->pm_lock);
++		write_unlock_irqrestore(&mhi_cntrl->pm_lock, flags);
+ 		goto exit_intvec;
+ 	}
+ 
+@@ -395,7 +396,7 @@ irqreturn_t mhi_intvec_threaded_handler(int irq_number, void *priv)
+ 		pm_state = mhi_tryset_pm_state(mhi_cntrl,
+ 					       MHI_PM_SYS_ERR_DETECT);
+ 	}
+-	write_unlock_irq(&mhi_cntrl->pm_lock);
++	write_unlock_irqrestore(&mhi_cntrl->pm_lock, flags);
+ 
+ 	 /* If device supports RDDM don't bother processing SYS error */
+ 	if (mhi_cntrl->rddm_image) {
+@@ -681,7 +682,7 @@ int mhi_process_ctrl_ev_ring(struct mhi_controller *mhi_cntrl,
+ 	struct device *dev = &mhi_cntrl->mhi_dev->dev;
+ 	u32 chan;
+ 	int count = 0;
+-
++	unsigned long flags = 0;
+ 	/*
+ 	 * This is a quick check to avoid unnecessary event processing
+ 	 * in case MHI is already in error state, but it's still possible
+@@ -702,12 +703,12 @@ int mhi_process_ctrl_ev_ring(struct mhi_controller *mhi_cntrl,
+ 			struct mhi_link_info *link_info;
+ 
+ 			link_info = &mhi_cntrl->mhi_link_info;
+-			write_lock_irq(&mhi_cntrl->pm_lock);
++			write_lock_irqsave(&mhi_cntrl->pm_lock, flags);
+ 			link_info->target_link_speed =
+ 				MHI_TRE_GET_EV_LINKSPEED(local_rp);
+ 			link_info->target_link_width =
+ 				MHI_TRE_GET_EV_LINKWIDTH(local_rp);
+-			write_unlock_irq(&mhi_cntrl->pm_lock);
++			write_unlock_irqrestore(&mhi_cntrl->pm_lock, flags);
+ 			dev_dbg(dev, "Received BW_REQ event\n");
+ 			mhi_cntrl->status_cb(mhi_cntrl, MHI_CB_BW_REQ);
+ 			break;
+@@ -741,10 +742,10 @@ int mhi_process_ctrl_ev_ring(struct mhi_controller *mhi_cntrl,
+ 					break;
+ 
+ 				dev_dbg(dev, "System error detected\n");
+-				write_lock_irq(&mhi_cntrl->pm_lock);
++				write_lock_irqsave(&mhi_cntrl->pm_lock, flags);
+ 				new_state = mhi_tryset_pm_state(mhi_cntrl,
+ 							MHI_PM_SYS_ERR_DETECT);
+-				write_unlock_irq(&mhi_cntrl->pm_lock);
++				write_unlock_irqrestore(&mhi_cntrl->pm_lock, flags);
+ 				if (new_state == MHI_PM_SYS_ERR_DETECT)
+ 					mhi_pm_sys_err_handler(mhi_cntrl);
+ 				break;
+@@ -776,9 +777,9 @@ int mhi_process_ctrl_ev_ring(struct mhi_controller *mhi_cntrl,
+ 				break;
+ 			case MHI_EE_RDDM:
+ 				mhi_cntrl->status_cb(mhi_cntrl, MHI_CB_EE_RDDM);
+-				write_lock_irq(&mhi_cntrl->pm_lock);
++				write_lock_irqsave(&mhi_cntrl->pm_lock, flags);
+ 				mhi_cntrl->ee = event;
+-				write_unlock_irq(&mhi_cntrl->pm_lock);
++				write_unlock_irqrestore(&mhi_cntrl->pm_lock, flags);
+ 				wake_up_all(&mhi_cntrl->state_event);
+ 				break;
+ 			default:
+@@ -897,7 +898,7 @@ void mhi_ctrl_ev_task(unsigned long data)
+ 	enum mhi_state state;
+ 	enum mhi_pm_state pm_state = 0;
+ 	int ret;
+-
++	unsigned long flags = 0;
+ 	/*
+ 	 * We can check PM state w/o a lock here because there is no way
+ 	 * PM state can change from reg access valid to no access while this
+@@ -922,14 +923,14 @@ void mhi_ctrl_ev_task(unsigned long data)
+ 	 * SYS_ERR state? Check the state to confirm.
+ 	 */
+ 	if (!ret) {
+-		write_lock_irq(&mhi_cntrl->pm_lock);
++		write_lock_irqsave(&mhi_cntrl->pm_lock, flags);
+ 		state = mhi_get_mhi_state(mhi_cntrl);
+ 		if (state == MHI_STATE_SYS_ERR) {
+ 			dev_dbg(dev, "System error detected\n");
+ 			pm_state = mhi_tryset_pm_state(mhi_cntrl,
+ 						       MHI_PM_SYS_ERR_DETECT);
+ 		}
+-		write_unlock_irq(&mhi_cntrl->pm_lock);
++		write_unlock_irqrestore(&mhi_cntrl->pm_lock, flags);
+ 		if (pm_state == MHI_PM_SYS_ERR_DETECT)
+ 			mhi_pm_sys_err_handler(mhi_cntrl);
+ 	}
+@@ -1218,20 +1219,21 @@ static void __mhi_unprepare_channel(struct mhi_controller *mhi_cntrl,
+ {
+ 	int ret;
+ 	struct device *dev = &mhi_cntrl->mhi_dev->dev;
+-
++	unsigned long flags = 0;
++	
+ 	dev_dbg(dev, "Entered: unprepare channel:%d\n", mhi_chan->chan);
+ 
+ 	/* no more processing events for this channel */
+ 	mutex_lock(&mhi_chan->mutex);
+-	write_lock_irq(&mhi_chan->lock);
++	write_lock_irqsave(&mhi_chan->lock, flags);
+ 	if (mhi_chan->ch_state != MHI_CH_STATE_ENABLED) {
+-		write_unlock_irq(&mhi_chan->lock);
++		write_unlock_irqrestore(&mhi_chan->lock, flags);
+ 		mutex_unlock(&mhi_chan->mutex);
+ 		return;
+ 	}
+ 
+ 	mhi_chan->ch_state = MHI_CH_STATE_DISABLED;
+-	write_unlock_irq(&mhi_chan->lock);
++	write_unlock_irqrestore(&mhi_chan->lock, flags);
+ 
+ 	reinit_completion(&mhi_chan->completion);
+ 	read_lock_bh(&mhi_cntrl->pm_lock);
+@@ -1270,7 +1272,7 @@ int mhi_prepare_channel(struct mhi_controller *mhi_cntrl,
+ {
+ 	int ret = 0;
+ 	struct device *dev = &mhi_cntrl->mhi_dev->dev;
+-
++	unsigned long flags = 0;
+ 	dev_dbg(dev, "Preparing channel: %d\n", mhi_chan->chan);
+ 
+ 	if (!(BIT(mhi_cntrl->ee) & mhi_chan->ee_mask)) {
+@@ -1322,9 +1324,9 @@ int mhi_prepare_channel(struct mhi_controller *mhi_cntrl,
+ 		goto error_pm_state;
+ 	}
+ 
+-	write_lock_irq(&mhi_chan->lock);
++	write_lock_irqsave(&mhi_chan->lock, flags);
+ 	mhi_chan->ch_state = MHI_CH_STATE_ENABLED;
+-	write_unlock_irq(&mhi_chan->lock);
++	write_unlock_irqrestore(&mhi_chan->lock, flags);
+ 
+ 	/* Pre-allocate buffer for xfer ring */
+ 	if (mhi_chan->pre_alloc) {
+@@ -1354,9 +1356,9 @@ int mhi_prepare_channel(struct mhi_controller *mhi_cntrl,
+ 
+ 		read_lock_bh(&mhi_cntrl->pm_lock);
+ 		if (MHI_DB_ACCESS_VALID(mhi_cntrl)) {
+-			read_lock_irq(&mhi_chan->lock);
++			read_lock_irqsave(&mhi_chan->lock, flags);
+ 			mhi_ring_chan_db(mhi_cntrl, mhi_chan);
+-			read_unlock_irq(&mhi_chan->lock);
++			read_unlock_irqrestore(&mhi_chan->lock, flags);
+ 		}
+ 		read_unlock_bh(&mhi_cntrl->pm_lock);
+ 	}
+diff --git a/drivers/bus/mhi/core/pm.c b/drivers/bus/mhi/core/pm.c
+index 3de7b1639ec6..50aaa56473c9 100644
+--- a/drivers/bus/mhi/core/pm.c
++++ b/drivers/bus/mhi/core/pm.c
+@@ -158,7 +158,7 @@ int mhi_ready_state_transition(struct mhi_controller *mhi_cntrl)
+ 	struct device *dev = &mhi_cntrl->mhi_dev->dev;
+ 	u32 reset = 1, ready = 0;
+ 	int ret, i;
+-
++	unsigned long flags = 0;
+ 	/* Wait for RESET to be cleared and READY bit to be set by the device */
+ 	wait_event_timeout(mhi_cntrl->state_event,
+ 			   MHI_PM_IN_FATAL_STATE(mhi_cntrl->pm_state) ||
+@@ -184,10 +184,10 @@ int mhi_ready_state_transition(struct mhi_controller *mhi_cntrl)
+ 	}
+ 
+ 	dev_dbg(dev, "Device in READY State\n");
+-	write_lock_irq(&mhi_cntrl->pm_lock);
++	write_lock_irqsave(&mhi_cntrl->pm_lock, flags);
+ 	cur_state = mhi_tryset_pm_state(mhi_cntrl, MHI_PM_POR);
+ 	mhi_cntrl->dev_state = MHI_STATE_READY;
+-	write_unlock_irq(&mhi_cntrl->pm_lock);
++	write_unlock_irqrestore(&mhi_cntrl->pm_lock, flags);
+ 
+ 	if (cur_state != MHI_PM_POR) {
+ 		dev_err(dev, "Error moving to state %s from %s\n",
+@@ -224,9 +224,9 @@ int mhi_ready_state_transition(struct mhi_controller *mhi_cntrl)
+ 		smp_wmb();
+ 
+ 		/* Ring the event ring db */
+-		spin_lock_irq(&mhi_event->lock);
++		spin_lock_irqsave(&mhi_event->lock, flags);
+ 		mhi_ring_er_db(mhi_event);
+-		spin_unlock_irq(&mhi_event->lock);
++		spin_unlock_irqrestore(&mhi_event->lock, flags);
+ 	}
+ 
+ 	/* Set MHI to M0 state */
+@@ -247,11 +247,12 @@ int mhi_pm_m0_transition(struct mhi_controller *mhi_cntrl)
+ 	struct mhi_chan *mhi_chan;
+ 	struct device *dev = &mhi_cntrl->mhi_dev->dev;
+ 	int i;
+-
+-	write_lock_irq(&mhi_cntrl->pm_lock);
++	unsigned long flags = 0;
++	
++	write_lock_irqsave(&mhi_cntrl->pm_lock, flags);
+ 	mhi_cntrl->dev_state = MHI_STATE_M0;
+ 	cur_state = mhi_tryset_pm_state(mhi_cntrl, MHI_PM_M0);
+-	write_unlock_irq(&mhi_cntrl->pm_lock);
++	write_unlock_irqrestore(&mhi_cntrl->pm_lock, flags);
+ 	if (unlikely(cur_state != MHI_PM_M0)) {
+ 		dev_err(dev, "Unable to transition to M0 state\n");
+ 		return -EIO;
+@@ -272,16 +273,16 @@ int mhi_pm_m0_transition(struct mhi_controller *mhi_cntrl)
+ 			if (mhi_event->offload_ev)
+ 				continue;
+ 
+-			spin_lock_irq(&mhi_event->lock);
++			spin_lock_irqsave(&mhi_event->lock, flags);
+ 			mhi_ring_er_db(mhi_event);
+-			spin_unlock_irq(&mhi_event->lock);
++			spin_unlock_irqrestore(&mhi_event->lock, flags);
+ 		}
+ 
+ 		/* Only ring primary cmd ring if ring is not empty */
+-		spin_lock_irq(&mhi_cmd->lock);
++		spin_lock_irqsave(&mhi_cmd->lock, flags);
+ 		if (mhi_cmd->ring.rp != mhi_cmd->ring.wp)
+ 			mhi_ring_cmd_db(mhi_cntrl, mhi_cmd);
+-		spin_unlock_irq(&mhi_cmd->lock);
++		spin_unlock_irqrestore(&mhi_cmd->lock, flags);
+ 	}
+ 
+ 	/* Ring channel DB registers */
+@@ -290,17 +291,17 @@ int mhi_pm_m0_transition(struct mhi_controller *mhi_cntrl)
+ 		struct mhi_ring *tre_ring = &mhi_chan->tre_ring;
+ 
+ 		if (mhi_chan->db_cfg.reset_req) {
+-			write_lock_irq(&mhi_chan->lock);
++			write_lock_irqsave(&mhi_chan->lock, flags);
+ 			mhi_chan->db_cfg.db_mode = true;
+-			write_unlock_irq(&mhi_chan->lock);
++			write_unlock_irqrestore(&mhi_chan->lock, flags);
+ 		}
+ 
+-		read_lock_irq(&mhi_chan->lock);
++		read_lock_irqsave(&mhi_chan->lock, flags);
+ 
+ 		/* Only ring DB if ring is not empty */
+ 		if (tre_ring->base && tre_ring->wp  != tre_ring->rp)
+ 			mhi_ring_chan_db(mhi_cntrl, mhi_chan);
+-		read_unlock_irq(&mhi_chan->lock);
++		read_unlock_irqrestore(&mhi_chan->lock, flags);
+ 	}
+ 
+ 	mhi_cntrl->wake_put(mhi_cntrl, false);
+@@ -319,14 +320,15 @@ void mhi_pm_m1_transition(struct mhi_controller *mhi_cntrl)
+ {
+ 	enum mhi_pm_state state;
+ 	struct device *dev = &mhi_cntrl->mhi_dev->dev;
+-
+-	write_lock_irq(&mhi_cntrl->pm_lock);
++	unsigned long flags = 0;
++	
++	write_lock_irqsave(&mhi_cntrl->pm_lock, flags);
+ 	state = mhi_tryset_pm_state(mhi_cntrl, MHI_PM_M2);
+ 	if (state == MHI_PM_M2) {
+ 		mhi_set_mhi_state(mhi_cntrl, MHI_STATE_M2);
+ 		mhi_cntrl->dev_state = MHI_STATE_M2;
+ 
+-		write_unlock_irq(&mhi_cntrl->pm_lock);
++		write_unlock_irqrestore(&mhi_cntrl->pm_lock, flags);
+ 
+ 		mhi_cntrl->M2++;
+ 		wake_up_all(&mhi_cntrl->state_event);
+@@ -346,7 +348,7 @@ void mhi_pm_m1_transition(struct mhi_controller *mhi_cntrl)
+ 			mhi_cntrl->status_cb(mhi_cntrl, MHI_CB_IDLE);
+ 		}
+ 	} else {
+-		write_unlock_irq(&mhi_cntrl->pm_lock);
++		write_unlock_irqrestore(&mhi_cntrl->pm_lock, flags);
+ 	}
+ }
+ 
+@@ -355,11 +357,12 @@ int mhi_pm_m3_transition(struct mhi_controller *mhi_cntrl)
+ {
+ 	enum mhi_pm_state state;
+ 	struct device *dev = &mhi_cntrl->mhi_dev->dev;
+-
+-	write_lock_irq(&mhi_cntrl->pm_lock);
++	unsigned long flags = 0;
++	
++	write_lock_irqsave(&mhi_cntrl->pm_lock, flags);
+ 	mhi_cntrl->dev_state = MHI_STATE_M3;
+ 	state = mhi_tryset_pm_state(mhi_cntrl, MHI_PM_M3);
+-	write_unlock_irq(&mhi_cntrl->pm_lock);
++	write_unlock_irqrestore(&mhi_cntrl->pm_lock, flags);
+ 	if (state != MHI_PM_M3) {
+ 		dev_err(dev, "Unable to transition to M3 state\n");
+ 		return -EIO;
+@@ -377,13 +380,14 @@ static int mhi_pm_mission_mode_transition(struct mhi_controller *mhi_cntrl)
+ 	struct mhi_event *mhi_event;
+ 	struct device *dev = &mhi_cntrl->mhi_dev->dev;
+ 	int i, ret;
+-
++	unsigned long flags = 0;
++	
+ 	dev_dbg(dev, "Processing Mission Mode transition\n");
+ 
+-	write_lock_irq(&mhi_cntrl->pm_lock);
++	write_lock_irqsave(&mhi_cntrl->pm_lock, flags);
+ 	if (MHI_REG_ACCESS_VALID(mhi_cntrl->pm_state))
+ 		mhi_cntrl->ee = mhi_get_exec_env(mhi_cntrl);
+-	write_unlock_irq(&mhi_cntrl->pm_lock);
++	write_unlock_irqrestore(&mhi_cntrl->pm_lock, flags);
+ 
+ 	if (!MHI_IN_MISSION_MODE(mhi_cntrl->ee))
+ 		return -EIO;
+@@ -417,10 +421,10 @@ static int mhi_pm_mission_mode_transition(struct mhi_controller *mhi_cntrl)
+ 		/* Update to all cores */
+ 		smp_wmb();
+ 
+-		spin_lock_irq(&mhi_event->lock);
++		spin_lock_irqsave(&mhi_event->lock, flags);
+ 		if (MHI_DB_ACCESS_VALID(mhi_cntrl))
+ 			mhi_ring_er_db(mhi_event);
+-		spin_unlock_irq(&mhi_event->lock);
++		spin_unlock_irqrestore(&mhi_event->lock, flags);
+ 	}
+ 
+ 	read_unlock_bh(&mhi_cntrl->pm_lock);
+@@ -451,7 +455,7 @@ static void mhi_pm_disable_transition(struct mhi_controller *mhi_cntrl,
+ 	struct mhi_event_ctxt *er_ctxt;
+ 	struct device *dev = &mhi_cntrl->mhi_dev->dev;
+ 	int ret, i;
+-
++	unsigned long flags = 0;
+ 	dev_dbg(dev, "Transitioning from PM state: %s to: %s\n",
+ 		to_mhi_pm_state_str(mhi_cntrl->pm_state),
+ 		to_mhi_pm_state_str(transition_state));
+@@ -461,14 +465,14 @@ static void mhi_pm_disable_transition(struct mhi_controller *mhi_cntrl,
+ 		mhi_cntrl->status_cb(mhi_cntrl, MHI_CB_SYS_ERROR);
+ 
+ 	mutex_lock(&mhi_cntrl->pm_mutex);
+-	write_lock_irq(&mhi_cntrl->pm_lock);
++	write_lock_irqsave(&mhi_cntrl->pm_lock, flags);
+ 	prev_state = mhi_cntrl->pm_state;
+ 	cur_state = mhi_tryset_pm_state(mhi_cntrl, transition_state);
+ 	if (cur_state == transition_state) {
+ 		mhi_cntrl->ee = MHI_EE_DISABLE_TRANSITION;
+ 		mhi_cntrl->dev_state = MHI_STATE_RESET;
+ 	}
+-	write_unlock_irq(&mhi_cntrl->pm_lock);
++	write_unlock_irqrestore(&mhi_cntrl->pm_lock, flags);
+ 
+ 	/* Wake up threads waiting for state transition */
+ 	wake_up_all(&mhi_cntrl->state_event);
+@@ -566,9 +570,9 @@ static void mhi_pm_disable_transition(struct mhi_controller *mhi_cntrl,
+ 		mhi_ready_state_transition(mhi_cntrl);
+ 	} else {
+ 		/* Move to disable state */
+-		write_lock_irq(&mhi_cntrl->pm_lock);
++		write_lock_irqsave(&mhi_cntrl->pm_lock, flags);
+ 		cur_state = mhi_tryset_pm_state(mhi_cntrl, MHI_PM_DISABLE);
+-		write_unlock_irq(&mhi_cntrl->pm_lock);
++		write_unlock_irqrestore(&mhi_cntrl->pm_lock, flags);
+ 		if (unlikely(cur_state != MHI_PM_DISABLE))
+ 			dev_err(dev, "Error moving from PM state: %s to: %s\n",
+ 				to_mhi_pm_state_str(cur_state),
+@@ -625,10 +629,11 @@ void mhi_pm_st_worker(struct work_struct *work)
+ 							struct mhi_controller,
+ 							st_worker);
+ 	struct device *dev = &mhi_cntrl->mhi_dev->dev;
+-
+-	spin_lock_irq(&mhi_cntrl->transition_lock);
++	unsigned long flags = 0;
++	
++	spin_lock_irqsave(&mhi_cntrl->transition_lock, flags);
+ 	list_splice_tail_init(&mhi_cntrl->transition_list, &head);
+-	spin_unlock_irq(&mhi_cntrl->transition_lock);
++	spin_unlock_irqrestore(&mhi_cntrl->transition_lock, flags);
+ 
+ 	list_for_each_entry_safe(itr, tmp, &head, node) {
+ 		list_del(&itr->node);
+@@ -637,17 +642,17 @@ void mhi_pm_st_worker(struct work_struct *work)
+ 
+ 		switch (itr->state) {
+ 		case DEV_ST_TRANSITION_PBL:
+-			write_lock_irq(&mhi_cntrl->pm_lock);
++			write_lock_irqsave(&mhi_cntrl->pm_lock, flags);
+ 			if (MHI_REG_ACCESS_VALID(mhi_cntrl->pm_state))
+ 				mhi_cntrl->ee = mhi_get_exec_env(mhi_cntrl);
+-			write_unlock_irq(&mhi_cntrl->pm_lock);
++			write_unlock_irqrestore(&mhi_cntrl->pm_lock, flags);
+ 			if (MHI_IN_PBL(mhi_cntrl->ee))
+ 				mhi_fw_load_handler(mhi_cntrl);
+ 			break;
+ 		case DEV_ST_TRANSITION_SBL:
+-			write_lock_irq(&mhi_cntrl->pm_lock);
++			write_lock_irqsave(&mhi_cntrl->pm_lock, flags);
+ 			mhi_cntrl->ee = MHI_EE_SBL;
+-			write_unlock_irq(&mhi_cntrl->pm_lock);
++			write_unlock_irqrestore(&mhi_cntrl->pm_lock, flags);
+ 			/*
+ 			 * The MHI devices are only created when the client
+ 			 * device switches its Execution Environment (EE) to
+@@ -682,7 +687,8 @@ int mhi_pm_suspend(struct mhi_controller *mhi_cntrl)
+ 	struct device *dev = &mhi_cntrl->mhi_dev->dev;
+ 	enum mhi_pm_state new_state;
+ 	int ret;
+-
++	unsigned long flags = 0;
++	
+ 	if (mhi_cntrl->pm_state == MHI_PM_DISABLE)
+ 		return -EINVAL;
+ 
+@@ -715,18 +721,18 @@ int mhi_pm_suspend(struct mhi_controller *mhi_cntrl)
+ 		return -EIO;
+ 	}
+ 
+-	write_lock_irq(&mhi_cntrl->pm_lock);
++	write_lock_irqsave(&mhi_cntrl->pm_lock, flags);
+ 
+ 	if (atomic_read(&mhi_cntrl->dev_wake) ||
+ 	    atomic_read(&mhi_cntrl->pending_pkts)) {
+-		write_unlock_irq(&mhi_cntrl->pm_lock);
++		write_unlock_irqrestore(&mhi_cntrl->pm_lock, flags);
+ 		return -EBUSY;
+ 	}
+ 
+ 	dev_info(dev, "Allowing M3 transition\n");
+ 	new_state = mhi_tryset_pm_state(mhi_cntrl, MHI_PM_M3_ENTER);
+ 	if (new_state != MHI_PM_M3_ENTER) {
+-		write_unlock_irq(&mhi_cntrl->pm_lock);
++		write_unlock_irqrestore(&mhi_cntrl->pm_lock, flags);
+ 		dev_err(dev,
+ 			"Error setting to PM state: %s from: %s\n",
+ 			to_mhi_pm_state_str(MHI_PM_M3_ENTER),
+@@ -736,7 +742,7 @@ int mhi_pm_suspend(struct mhi_controller *mhi_cntrl)
+ 
+ 	/* Set MHI to M3 and wait for completion */
+ 	mhi_set_mhi_state(mhi_cntrl, MHI_STATE_M3);
+-	write_unlock_irq(&mhi_cntrl->pm_lock);
++	write_unlock_irqrestore(&mhi_cntrl->pm_lock, flags);
+ 	dev_info(dev, "Wait for M3 completion\n");
+ 
+ 	ret = wait_event_timeout(mhi_cntrl->state_event,
+@@ -770,7 +776,8 @@ int mhi_pm_resume(struct mhi_controller *mhi_cntrl)
+ 	struct device *dev = &mhi_cntrl->mhi_dev->dev;
+ 	enum mhi_pm_state cur_state;
+ 	int ret;
+-
++	unsigned long flags = 0;
++	
+ 	dev_info(dev, "Entered with PM state: %s, MHI state: %s\n",
+ 		 to_mhi_pm_state_str(mhi_cntrl->pm_state),
+ 		 TO_MHI_STATE_STR(mhi_cntrl->dev_state));
+@@ -789,10 +796,10 @@ int mhi_pm_resume(struct mhi_controller *mhi_cntrl)
+ 		mutex_unlock(&itr->mutex);
+ 	}
+ 
+-	write_lock_irq(&mhi_cntrl->pm_lock);
++	write_lock_irqsave(&mhi_cntrl->pm_lock, flags);
+ 	cur_state = mhi_tryset_pm_state(mhi_cntrl, MHI_PM_M3_EXIT);
+ 	if (cur_state != MHI_PM_M3_EXIT) {
+-		write_unlock_irq(&mhi_cntrl->pm_lock);
++		write_unlock_irqrestore(&mhi_cntrl->pm_lock, flags);
+ 		dev_info(dev,
+ 			 "Error setting to PM state: %s from: %s\n",
+ 			 to_mhi_pm_state_str(MHI_PM_M3_EXIT),
+@@ -802,7 +809,7 @@ int mhi_pm_resume(struct mhi_controller *mhi_cntrl)
+ 
+ 	/* Set MHI to M0 and wait for completion */
+ 	mhi_set_mhi_state(mhi_cntrl, MHI_STATE_M0);
+-	write_unlock_irq(&mhi_cntrl->pm_lock);
++	write_unlock_irqrestore(&mhi_cntrl->pm_lock, flags);
+ 
+ 	ret = wait_event_timeout(mhi_cntrl->state_event,
+ 				 mhi_cntrl->dev_state == MHI_STATE_M0 ||
+@@ -915,7 +922,7 @@ int mhi_async_power_up(struct mhi_controller *mhi_cntrl)
+ 	struct device *dev = &mhi_cntrl->mhi_dev->dev;
+ 	u32 val;
+ 	int ret;
+-
++	unsigned long flags = 0;
+ 	dev_info(dev, "Requested to power ON\n");
+ 
+ 	if (mhi_cntrl->nr_irqs < 1)
+@@ -945,10 +952,10 @@ int mhi_async_power_up(struct mhi_controller *mhi_cntrl)
+ 		goto error_setup_irq;
+ 
+ 	/* Setup BHI offset & INTVEC */
+-	write_lock_irq(&mhi_cntrl->pm_lock);
++	write_lock_irqsave(&mhi_cntrl->pm_lock, flags);
+ 	ret = mhi_read_reg(mhi_cntrl, mhi_cntrl->regs, BHIOFF, &val);
+ 	if (ret) {
+-		write_unlock_irq(&mhi_cntrl->pm_lock);
++		write_unlock_irqrestore(&mhi_cntrl->pm_lock, flags);
+ 		goto error_bhi_offset;
+ 	}
+ 
+@@ -958,7 +965,7 @@ int mhi_async_power_up(struct mhi_controller *mhi_cntrl)
+ 	if (mhi_cntrl->fbc_download) {
+ 		ret = mhi_read_reg(mhi_cntrl, mhi_cntrl->regs, BHIEOFF, &val);
+ 		if (ret) {
+-			write_unlock_irq(&mhi_cntrl->pm_lock);
++			write_unlock_irqrestore(&mhi_cntrl->pm_lock, flags);
+ 			dev_err(dev, "Error reading BHIE offset\n");
+ 			goto error_bhi_offset;
+ 		}
+@@ -970,7 +977,7 @@ int mhi_async_power_up(struct mhi_controller *mhi_cntrl)
+ 	mhi_cntrl->pm_state = MHI_PM_POR;
+ 	mhi_cntrl->ee = MHI_EE_MAX;
+ 	current_ee = mhi_get_exec_env(mhi_cntrl);
+-	write_unlock_irq(&mhi_cntrl->pm_lock);
++	write_unlock_irqrestore(&mhi_cntrl->pm_lock, flags);
+ 
+ 	/* Confirm that the device is in valid exec env */
+ 	if (!MHI_IN_PBL(current_ee) && current_ee != MHI_EE_AMSS) {
+@@ -1035,14 +1042,14 @@ void mhi_power_down(struct mhi_controller *mhi_cntrl, bool graceful)
+ {
+ 	enum mhi_pm_state cur_state;
+ 	struct device *dev = &mhi_cntrl->mhi_dev->dev;
+-
++	unsigned long flags = 0;
+ 	/* If it's not a graceful shutdown, force MHI to linkdown state */
+ 	if (!graceful) {
+ 		mutex_lock(&mhi_cntrl->pm_mutex);
+-		write_lock_irq(&mhi_cntrl->pm_lock);
++		write_lock_irqsave(&mhi_cntrl->pm_lock, flags);
+ 		cur_state = mhi_tryset_pm_state(mhi_cntrl,
+ 						MHI_PM_LD_ERR_FATAL_DETECT);
+-		write_unlock_irq(&mhi_cntrl->pm_lock);
++		write_unlock_irqrestore(&mhi_cntrl->pm_lock, flags);
+ 		mutex_unlock(&mhi_cntrl->pm_mutex);
+ 		if (cur_state != MHI_PM_LD_ERR_FATAL_DETECT)
+ 			dev_dbg(dev, "Failed to move to state: %s from: %s\n",
+diff --git a/drivers/net/wireless/ath/ath11k/pci.c b/drivers/net/wireless/ath/ath11k/pci.c
+index 18432c360249..771870618fb3 100644
+--- a/drivers/net/wireless/ath/ath11k/pci.c
++++ b/drivers/net/wireless/ath/ath11k/pci.c
+@@ -534,25 +534,30 @@ static void ath11k_pci_sync_ce_irqs(struct ath11k_base *ab)
+ 
+ static void ath11k_pci_ce_tasklet(unsigned long data)
+ {
+-
++	u32 vecs_32_cap;
+ 	struct ath11k_ce_pipe *ce_pipe = (struct ath11k_ce_pipe *)data;
+ 	int irq_idx = ATH11K_PCI_IRQ_CE0_OFFSET + ce_pipe->pipe_num;
++	vecs_32_cap = ath11k_pci_priv(ce_pipe->ab)->vectors_32_capability;
+ 
+ 	ath11k_ce_per_engine_service(ce_pipe->ab, ce_pipe->pipe_num);
+-
+-	enable_irq(ce_pipe->ab->irq_num[irq_idx]);
++	if(vecs_32_cap)
++		enable_irq(ce_pipe->ab->irq_num[irq_idx]);
+ }
+ 
+ static irqreturn_t ath11k_pci_ce_interrupt_handler(int irq, void *arg)
+ {
++	u32 vecs_32_cap;
+ 	struct ath11k_ce_pipe *ce_pipe = arg;
+ 	struct ath11k_base *ab = ce_pipe->ab;
+ 	int irq_idx = ATH11K_PCI_IRQ_CE0_OFFSET + ce_pipe->pipe_num;
++	vecs_32_cap = ath11k_pci_priv(ce_pipe->ab)->vectors_32_capability;
+ 
+-	disable_irq_nosync(ab->irq_num[irq_idx]);
++	if(vecs_32_cap)
++		disable_irq_nosync(ab->irq_num[irq_idx]);
+ 
+ 	if (!ab->irq_enable_flag[irq_idx]) {
+-		enable_irq(ab->irq_num[irq_idx]);
++		if(vecs_32_cap)
++			enable_irq(ab->irq_num[irq_idx]);
+ 		return IRQ_HANDLED;
+ 	}
+ 
+@@ -644,12 +649,16 @@ static int ath11k_pci_ext_grp_napi_poll(struct napi_struct *napi, int budget)
+ 	struct ath11k_base *ab = irq_grp->ab;
+ 	int work_done;
+ 	int i;
++	u32 vecs_32_cap;
++	vecs_32_cap = ath11k_pci_priv(ab)->vectors_32_capability;
+ 
+ 	work_done = ath11k_dp_service_srng(ab, irq_grp, budget);
+ 	if (work_done < budget) {
+ 		napi_complete_done(napi, work_done);
+-		for (i = 0; i < irq_grp->num_irq; i++)
+-			enable_irq(irq_grp->ab->irq_num[irq_grp->irqs[i]]);
++		if(vecs_32_cap) {
++			for (i = 0; i < irq_grp->num_irq; i++)
++				enable_irq(irq_grp->ab->irq_num[irq_grp->irqs[i]]);
++		}
+ 	}
+ 
+ 	if (work_done > budget)
+@@ -662,13 +671,19 @@ static irqreturn_t ath11k_pci_ext_interrupt_handler(int irq, void *arg)
+ {
+ 	struct ath11k_ext_irq_grp *irq_grp = arg;
+ 	int i;
++	u32 vecs_32_cap;
++	vecs_32_cap = ath11k_pci_priv(irq_grp->ab)->vectors_32_capability;
+ 
+-	for (i = 0; i < irq_grp->num_irq; i++)
+-		disable_irq_nosync(irq_grp->ab->irq_num[irq_grp->irqs[i]]);
++	if(vecs_32_cap) {
++		for (i = 0; i < irq_grp->num_irq; i++)
++			disable_irq_nosync(irq_grp->ab->irq_num[irq_grp->irqs[i]]);
++	}
+ 
+ 	if (!irq_grp->ab->irq_enable_flag[irq_grp->irqs[0]]) {
+-		for (i = 0; i < irq_grp->num_irq; i++)
+-			enable_irq(irq_grp->ab->irq_num[irq_grp->irqs[i]]);
++		if(vecs_32_cap) {
++			for (i = 0; i < irq_grp->num_irq; i++)
++				enable_irq(irq_grp->ab->irq_num[irq_grp->irqs[i]]);
++		}
+ 		return IRQ_HANDLED;
+ 	}
+ 
